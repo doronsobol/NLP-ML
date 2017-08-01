@@ -238,6 +238,7 @@ def pipeline_test(test, bow_vectorizer, tfreq_vectorizer, tfidf_vectorizer, use_
 
     # Initialise
     test_set = []
+    test_stances = []
     heads_track = {}
     bodies_track = {}
     cos_track = {}
@@ -277,8 +278,9 @@ def pipeline_test(test, bow_vectorizer, tfreq_vectorizer, tfidf_vectorizer, use_
             feat_vec = np.squeeze(np.c_[head_tf, body_tf])
 
         test_set.append(feat_vec)
+        test_stances.append(label_ref[instance['Stance']])
 
-    return test_set
+    return test_set, test_stances
 
 
 def load_model(sess):

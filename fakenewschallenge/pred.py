@@ -22,15 +22,15 @@ from test_score import calc_error
 import pdb
 # Prompt for mode
 mode = input('mode (load / train)? ')
-
+dir = input('Enter dir: ')
 
 # Set file names
-file_train_instances = "train_stances.csv"
-file_train_bodies = "train_bodies.csv"
-file_test_instances = "test_stances_unlabeled.csv"
-file_test_bodies = "test_bodies.csv"
-file_predictions = 'predictions_test.csv'
-file_test_labels = "test_stances.csv"
+file_train_instances = dir + "/train_stances.csv"
+file_train_bodies = dir + "/train_bodies.csv"
+file_test_instances = dir + "/test_stances.csv"
+file_test_bodies = dir + "/test_bodies.csv"
+file_predictions = dir + '/predictions_test.csv'
+file_test_labels = dir + "/test_stances.csv"
 
 
 # Initialise hyperparameters
@@ -44,9 +44,9 @@ learn_rate = 0.01
 clip_ratio = 5
 batch_size_train = 500
 epochs = 90
-use_hidden = False
-use_cosine = False
-just_cosine = True
+use_hidden = input('Use hidden (y / n)? ') == 'y'
+use_cosine = input('Use cosine (y / n)? ') == 'y'
+just_cosine = input('Just cosine (y / n)? ') == 'y'
 
 # Load data sets
 raw_train = FNCData(file_train_instances, file_train_bodies)
@@ -58,9 +58,9 @@ print('loaded {} instances'.format(n_train))
 train_set, train_stances, bow_vectorizer, tfreq_vectorizer, tfidf_vectorizer = \
     pipeline_train(raw_train, raw_test, lim_unigram=lim_unigram, use_cosine=use_cosine, just_cosine=just_cosine)
 feature_size = len(train_set[0])
-pdb.set_trace()
+
 print("feature_size is {}".format(feature_size))
-test_set = pipeline_test(raw_test, bow_vectorizer, tfreq_vectorizer, tfidf_vectorizer, use_cosine=use_cosine, just_cosine=just_cosine)
+test_set, test_stances = pipeline_test(raw_test, bow_vectorizer, tfreq_vectorizer, tfidf_vectorizer, use_cosine=use_cosine, just_cosine=just_cosine)
 print('processed datasets')
 
 # Define model
@@ -91,6 +91,10 @@ l2_loss = tf.add_n([tf.nn.l2_loss(v) for v in tf_vars if 'bias' not in v.name]) 
 # Define overall loss
 loss = tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(logits, stances_pl) + l2_loss)
 
+summary = tf.summary.scalar('loss', tf.reduce_mean(loss))
+
+
+
 # Define prediction
 softmaxed_logits = tf.nn.softmax(logits)
 predict = tf.arg_max(softmaxed_logits, 1)
@@ -117,6 +121,10 @@ if mode == 'train':
 
     # Perform training
     with tf.Session() as sess:
+        train_writer = tf.summary.FileWriter("./summaries_dir" + '/train_' + dir,
+                                      sess.graph)
+        test_writer = tf.summary.FileWriter("./summaries_dir" + '/test_' + dir,
+                                      sess.graph)
         sess.run(tf.global_variables_initializer())
 
         for epoch in tqdm(range(epochs)):
@@ -130,9 +138,13 @@ if mode == 'train':
                 batch_stances = [train_stances[i] for i in batch_indices]
 
                 batch_feed_dict = {features_pl: batch_features, stances_pl: batch_stances, keep_prob_pl: train_keep_prob}
-                _, current_loss = sess.run([opt_op, loss], feed_dict=batch_feed_dict)
+                _, current_loss, s = sess.run([opt_op, loss, summary], feed_dict=batch_feed_dict)
                 total_loss += current_loss
-
+                train_writer.add_summary(s, epoch*(n_train // batch_size_train)+i)
+            test_feed_dict = {features_pl: test_set, stances_pl: test_stances, keep_prob_pl: 1.0}
+            s = sess.run(summary, feed_dict=test_feed_dict)
+            test_writer.add_summary(s, epoch*(n_train // batch_size_train))
+            
 
         # Predict
         test_feed_dict = {features_pl: test_set, keep_prob_pl: 1.0}
