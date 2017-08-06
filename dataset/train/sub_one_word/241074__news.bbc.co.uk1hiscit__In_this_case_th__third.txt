@@ -1,0 +1,3 @@
+In this case the first pip occurs at 23:59:55 (as usual) and there is a third short pip at 23:59:60 (the leap second) followed by the long pip at 00:00:00.
+news.bbc.co.uk/1/hi/sci/tech/7791709.stm
+He takes us to the digital control room of BBC Broadcasting House, London, to explain how, on New Year's Eve, the station will add an extra "pip" to the time signal, acknowledging the leap second.  This will reconcile atomic time with the time created by the Earth's rotational movement.
