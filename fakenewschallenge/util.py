@@ -1,4 +1,4 @@
-# Copyright 2017 Benjamin Riedel
+# Copyri:ght 2017 Benjamin Riedel
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,6 +23,10 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import tensorflow as tf
 import pdb
+from gensim.models.keyedvectors import KeyedVectors
+from nltk import word_tokenize
+
+model = KeyedVectors.load_word2vec_format('../word2vec-GoogleNews-vectors/GoogleNews-vectors-negative300.bin', binary=True)
 
 # Initialise global variables
 label_ref = {'agree': 0, 'disagree': 1, 'discuss': 2, 'unrelated': 3}
@@ -108,6 +112,19 @@ class FNCData:
 
         return rows
 
+
+def raw_data_to_embeding(data):
+    heads_embedding = []
+    bodies_embedding = []
+    stances = []
+    for instance in data.instances:
+        head = instance['Headline']
+        body_id = instance['Body ID']
+        body = data.bodies[body_id]
+        heads_embedding.append(np.array([model[x] for x in word_tokenize(head) if x in model]))
+        bodies_embedding.append(np.array([model[x] for x in word_tokenize(body) if x in model]))
+        stances.append(label_ref[instance['Stance']])
+    return heads_embedding, bodies_embedding, stances
 
 # Define relevant functions
 def pipeline_train(train, test, lim_unigram, use_cosine=True, just_cosine=False):
