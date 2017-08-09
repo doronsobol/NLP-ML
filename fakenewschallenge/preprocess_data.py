@@ -8,9 +8,12 @@ from nltk import word_tokenize
 from csv import DictReader
 import numpy as np
 import tensorflow as tf
+from tqdm import tqdm
 
 FLAGS = tf.app.flags.FLAGS
 
+tf.app.flags.DEFINE_integer("RPF", 100,
+                            "number of examples per file")
 tf.app.flags.DEFINE_string("data_path", None,
                             "Where the training/test data is stored.")
 print("loading model")
@@ -33,12 +36,14 @@ def _floatlist_feature(value):
     return tf.train.Feature(float_list=tf.train.FloatList(value=value))
 
 def convert_to(csv_file, record_file):
-    filename = os.path.join(FLAGS.data_path, record_file + '.tfrecords')
+    file_num = 0
+    rec_per_file = 0
+    filename = os.path.join(FLAGS.data_path, record_file + "_" + str(file_num) + '.tfrecords')
     print('Writing', filename)
     writer = tf.python_io.TFRecordWriter(filename)
     with open(csv_file, "r", encoding='utf-8') as table:
         r = DictReader(table)
-        for line in r:
+        for line in tqdm(list(r)):
             label = label_ref[line['stance']]
             ref = np.array([model[x] for x in word_tokenize(line["head"]) if x in model])
             body = np.array([model[x] for x in word_tokenize(line["body"]) if x in model])
@@ -63,6 +68,13 @@ def convert_to(csv_file, record_file):
             for e in body.flatten():
                 fl_body.feature.add().float_list.value.append(e)
             writer.write(ex.SerializeToString())
+            rec_per_file +=1
+            if rec_per_file > FLAGS.RPF:
+                file_num += 1
+                filename = os.path.join(FLAGS.data_path, record_file + "_" + str(file_num) + '.tfrecords')
+                print('Writing', filename)
+                writer = tf.python_io.TFRecordWriter(filename)
+
     writer.close()
 
 def main(argv):

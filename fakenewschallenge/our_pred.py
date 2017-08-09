@@ -47,16 +47,14 @@ model={}
 batch_size = 32
 label_ref = {'agree': 0, 'disagree': 1, 'discuss': 2, 'unrelated': 3}
 
-filename_train = FLAGS.data_path + "/train.tfrecords"
-filename_train = FLAGS.data_path + "/test.tfrecords"
+filenames_train = tf.train.match_filenames_once(FLAGS.data_path + "/train_%d.tfrecords")
+filenames_test = tf.test.match_filenames_once(FLAGS.data_path + "/test_%d.tfrecords")
 embedding_dim = 300
 
 def read_file_queue(filename_queue):
     reader = tf.TFRecordReader()
     _, serialized_example = reader.read(filename_queue)
     context_features={
-        'head': tf.VarLenFeature(tf.float32),
-        'body': tf.VarLenFeature(tf.float32),
         'head_len': tf.FixedLenFeature([], tf.int64),
         'body_len': tf.FixedLenFeature([], tf.int64),
         'label': tf.FixedLenFeature([], tf.int64)
@@ -215,7 +213,7 @@ classifier = tf.estimator.Estimator(
 metrics = { 
         "accuracy": tf.contrib.learn.MetricSpec(metric_fn=tf.metrics.accuracy, prediction_key="classes"),
         }
-classifier.train(input_fn=functools.partial(input_pipeline ,filenames=[filename_train], batch_size=32),
+classifier.train(input_fn=functools.partial(input_pipeline ,filenames=filenames_train, batch_size=32),
         steps=20000, hooks=[logging_hook])
 """
 class ConditionalModel(object):
