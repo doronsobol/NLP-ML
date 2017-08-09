@@ -20,97 +20,244 @@ import tensorflow as tf
 from tqdm import tqdm
 from test_score import calc_error
 import pdb
+import functools
 # Prompt for mode
-from tf.contrib.rnn import 
+from tensorflow.contrib.learn.python.learn.estimators import model_fn as model_fn_lib
+import tensorflow.contrib.learn as learn
+from gensim.models.keyedvectors import KeyedVectors
+from nltk import word_tokenize
 
-flags = tf.flags
-logging = tf.logging
+tf.logging.set_verbosity(tf.logging.INFO)
 
-flags.DEFINE_bool("train", False,
+FLAGS = tf.app.flags.FLAGS
+
+tf.app.flags.DEFINE_bool("train", False,
                           "Train the data")
-flags.DEFINE_string("save_path", None,
+tf.app.flags.DEFINE_bool("use_fp16", False,
+                          "Data type to use")
+tf.app.flags.DEFINE_string("save_path", None,
                             "Model output directory.")
-flags.DEFINE_string("data_path", None,
+tf.app.flags.DEFINE_string("data_path", None,
                             "Where the training/test data is stored.")
-FLAGS = flags.FLAGS
+
+#filename_queue = tf.train.string_input_producer([ FLAGS.data_path + "/data.csv"])
+print("loading model")
+#model = KeyedVectors.load_word2vec_format('../word2vec-GoogleNews-vectors/GoogleNews-vectors-negative300.bin', binary=True)
+model={}
+batch_size = 32
+label_ref = {'agree': 0, 'disagree': 1, 'discuss': 2, 'unrelated': 3}
+
+filename_train = FLAGS.data_path + "/train.tfrecords"
+filename_train = FLAGS.data_path + "/test.tfrecords"
+embedding_dim = 300
+
+def read_file_queue(filename_queue):
+    reader = tf.TFRecordReader()
+    _, serialized_example = reader.read(filename_queue)
+    context_features={
+        'head': tf.VarLenFeature(tf.float32),
+        'body': tf.VarLenFeature(tf.float32),
+        'head_len': tf.FixedLenFeature([], tf.int64),
+        'body_len': tf.FixedLenFeature([], tf.int64),
+        'label': tf.FixedLenFeature([], tf.int64)
+        }
+    sequence_features = {
+            "head": tf.FixedLenSequenceFeature([], dtype=tf.float32),
+            "body": tf.FixedLenSequenceFeature([], dtype=tf.float32)
+            }
+    context_parsed, sequence_parsed = tf.parse_single_sequence_example(
+            serialized=serialized_example,
+            context_features=context_features,
+            sequence_features=sequence_features
+            )
+
+    head_len = context_parsed['head_len']
+    head = tf.reshape(sequence_parsed['head'],[head_len, embedding_dim])
+    body_len = context_parsed['body_len']
+    body = tf.reshape(sequence_parsed['body'],[body_len, embedding_dim])
+    label = context_parsed['label']
+    print(body_len)
+    return head, head_len, body, body_len, label
+
+def input_pipeline(filenames, batch_size, num_epochs=None):
+    filename_queue = tf.train.string_input_producer(
+                   filenames, num_epochs=num_epochs, shuffle=True)
+    head, head_len, body, body_len, label = read_file_queue(filename_queue)
+    min_after_dequeue = 10000
+    capacity = min_after_dequeue + 3 * batch_size
+    #tf.PaddingFIFOQueue(capacity=capacity,
+    batched_data = tf.train.batch(
+            tensors=[head, head_len, body, body_len, label],
+            batch_size=batch_size,
+            capacity=capacity,
+            names=["head", "head_len","body", "body_len", "label"],
+            #dtypes=[tf.float32, tf.int64, tf.float32, tf.int64, tf.int64],
+            dynamic_pad=True,
+            shapes=[[None, embedding_dim], [], [None, embedding_dim], [], []], name="padding queue")
+    return batched_data, batched_data["label"]
+
+
+def input_fn():
+    return_dict = {}
+    data_body = []
+    data_head = []
+    head_len = []
+    body_len = []
+    labels = []
+    while len(body_len) < batch_size:
+        for i in r:
+            data_body.append(np.array([model[x] for x in word_tokenize(i["body"]) if x in model]))
+            data_head.append(np.array([model[x] for x in word_tokenize(i["head"]) if x in model]))
+            body_len.append(data_body[-1].shape[0])
+            head_len.append(data_head[-1].shape[0])
+            labels.append(label_ref[i["stance"]])
+            if len(body_len) >= batch_size:
+                break
+        if len(body_len) >= batch_size:
+            break
+        table = open(filename, "r", encoding='utf-8')
+        r = DictReader(table)
+
+    body_len = np.array(body_len)
+    head_len = np.array(head_len)
+    emmbedding_size = data_body[0].shape[1]
+    maxlen_body = np.amax(body_len)
+    maxlen_head = np.amax(head_len)
+
+    for i, b in enumerate(data_body):
+        data_body[i] = np.lib.pad(b, [(0,maxlen_body-b.shape[0]),(0,0)], 'constant', constant_values=0)
+    data_body_np = np.stack(data_body)
+    for i, b in enumerate(data_head):
+        data_head[i] = np.lib.pad(b, [(0,maxlen_head-b.shape[0]),(0,0)], 'constant', constant_values=0)
+    data_head_np = np.stack(data_head)
+    return_dict["input_head"] = tf.constant(data_head_np)
+    return_dict["input_body"] = tf.constant(data_body_np)
+    return_dict["head_len"] = tf.constant(head_len)
+    return_dict["body_len"] = tf.constant(body_len)
+    labels = tf.constant(labels)
+    print(return_dict["input_head"].shape)
+    return return_dict, labels
+    
 
 def data_type():
     return tf.float16 if FLAGS.use_fp16 else tf.float32
 
-class ConditionalModel(object):
-  """The Conditional model model."""
+def extract_axis_1(data, ind):
+    """
+    Get specified elements along the first axis of tensor.
+    :param data: Tensorflow tensor that will be subsetted.
+    :param ind: Indices to take (one for each element along axis 0 of data).
+    :return: Subsetted tensor.
+    """
 
-  def __init__(self, is_training, batch_size, hidden_size, embedding_size):
+    batch_range = tf.range(tf.cast(tf.shape(data)[0], ind.dtype), dtype=ind.dtype)
+    indices = tf.stack([batch_range, ind], axis=1)
+    res = tf.gather_nd(data, indices)
+    return res
+
+
+
+def conditional_embedding_model_fn(mode, features, labels):#, params):
+    #hidden_size = params["hidden_size"]
+    input_head = features["input_head"]
+    input_body = features["input_body"]
+    seq_len_head = features["head_len"]
+    seq_len_body = features["body_len"]
+    num_of_outputs = 4
+    #head_cell = tf.contrib.rnn.LSTMCell(600)
+    #body_cell = tf.contrib.rnn.LSTMCell(600)
+    with tf.variable_scope('head'):
+        head_cell = tf.nn.rnn_cell.LSTMCell(600)
+        outputs_head, final_state_head = tf.nn.dynamic_rnn(
+                cell=head_cell, inputs=input_head, 
+                sequence_length=seq_len_head, dtype=data_type()
+                )
+
+    with tf.variable_scope('body'):
+        body_cell = tf.nn.rnn_cell.LSTMCell(600)
+        outputs_body, final_state_body = tf.nn.dynamic_rnn(
+                cell=body_cell, inputs=input_body, 
+                sequence_length=seq_len_body, dtype=data_type(),
+                initial_state=final_state_head
+                )
+
+    output_embedding = extract_axis_1(outputs_body, seq_len_body)
+    logits = tf.layers.dense(inputs=output_embedding, units=num_of_outputs)
+
+    loss = None
+    train_op = None
+
+    if mode != learn.ModeKeys.INFER:
+        loss = tf.losses.sparse_softmax_cross_entropy(
+                labels=labels,logits=logits
+                )
+    if mode == learn.ModeKeys.TRAIN:
+        train_op = tf.contrib.layers.optimize_loss(
+                loss=loss,
+                global_step=tf.contrib.framework.get_global_step(),
+                learning_rate=0.001,
+                optimizer="Adam")
+    predictions = {
+            "classes": tf.argmax(
+                input=logits, axis=1),
+            "probabilities": tf.nn.softmax(
+                logits, name="softmax_tensor")
+            }
+    return tf.estimator.EstimatorSpec(
+            mode=mode, predictions=predictions, loss=loss, train_op=train_op)
+
+print("starting to fit")
+tensors_to_log = {"probabilities": "softmax_tensor"}
+logging_hook = tf.train.LoggingTensorHook(
+              tensors=tensors_to_log, every_n_iter=50)
+classifier = tf.estimator.Estimator(
+              model_fn=conditional_embedding_model_fn, model_dir="/tmp/d_rnn_nodel_dir")
+metrics = { 
+        "accuracy": tf.contrib.learn.MetricSpec(metric_fn=tf.metrics.accuracy, prediction_key="classes"),
+        }
+classifier.train(input_fn=functools.partial(input_pipeline ,filenames=[filename_train], batch_size=32),
+        steps=20000, hooks=[logging_hook])
+"""
+class ConditionalModel(object):
+
+  def __init__(self, batch_size, hidden_size, embedding_size, num_of_outputs):
 
     self.batch_size = batch_size
     self.num_steps = num_steps
     size = hidden_size
     self.embedding_size = embedding_size
-    self.input = tf.placeholder(data_type(), shape=(batch_size, None, self.embedding_size))
+    self.input_head = tf.placeholder(data_type(), shape=(batch_size, None, self.embedding_size))
+    self.input_body = tf.placeholder(data_type(), shape=(batch_size, None, self.embedding_size))
     self.seq_len_head = tf.placeholder(tf.int32 , shape=(batch_size,))
     self.seq_len_body = tf.placeholder(tf.int32 , shape=(batch_size,))
+    self.labels = tf.placeholder(tf.int32 , shape=(batch_size,))
 
-
-    # Slightly better results can be obtained with forget gate biases
-    # initialized to 1 but the hyperparameters of the model would need to be
-    # different than reported in the paper.
     head_cell = LSTMCell()
-    self._initial_head_state = head_cell.zero_state(batch_size, data_type())
-    self._initial_body_state = body_cell.zero_state(batch_size, data_type())
+    body_cell = LSTMCell()
 
-    self.head_cell = tf.nn.dynamic_rnn(attn_cell(), self.input, self.seq_len_head, initial_state=self._initial_head_state, data_type())
-    self.body_cell = tf.nn.dynamic_rnn(attn_cell(), self.input, self.seq_len_body, initial_state=self._initial_body_state, data_type())
+    self.outputs_head, self.final_state_head = self.head_rnn = tf.nn.dynamic_rnn(
+            cell=head_cell, inputs=self.input_head, 
+            sequence_length=self.seq_len_head, dtype=data_type()
+            )
 
-    # Simplified version of models/tutorials/rnn/rnn.py's rnn().
-    # This builds an unrolled LSTM for tutorial purposes only.
-    # In general, use the rnn() or state_saving_rnn() from rnn.py.
-    #
-    # The alternative version of the code below is:
-    #
-    # inputs = tf.unstack(inputs, num=num_steps, axis=1)
-    # outputs, state = tf.contrib.rnn.static_rnn(
-    #     cell, inputs, initial_state=self._initial_state)
-    outputs = []
-    state = self._initial_state
-    with tf.variable_scope("RNN"):
-      for time_step in range(num_steps):
-        if time_step > 0: tf.get_variable_scope().reuse_variables()
-        (cell_output, state) = cell(inputs[:, time_step, :], state)
-        outputs.append(cell_output)
 
-    output = tf.reshape(tf.stack(axis=1, values=outputs), [-1, size])
-    softmax_w = tf.get_variable(
-        "softmax_w", [size, vocab_size], dtype=data_type())
-    softmax_b = tf.get_variable("softmax_b", [vocab_size], dtype=data_type())
-    logits = tf.matmul(output, softmax_w) + softmax_b
+    self.outputs_body, self.final_state_body = tf.nn.dynamic_rnn(
+            cell=body_cell, inputs=self.input_body, 
+            sequence_length=self.seq_len_body, dtype=data_type(),
+            initial_state=self.final_state_head
+            )
 
-    # Reshape logits to be 3-D tensor for sequence loss
-    logits = tf.reshape(logits, [batch_size, num_steps, vocab_size])
+    self.output_embedding = extract_axis_1(self.outputs_body, self.seq_len_body)
+    self.logits = tf.layers.dense(inputs=self.output_embedding, units=num_of_outputs)
+    self.softmax = tf.nn.softmax(self.logits)
+    self.loss = tf.nn,sparse_softmax_cross_entropy_with_logits(
+            labels=self.labels,logits=self.output
+            )
 
-    # use the contrib sequence loss and average over the batches
-    loss = tf.contrib.seq2seq.sequence_loss(
-        logits,
-        input_.targets,
-        tf.ones([batch_size, num_steps], dtype=data_type()),
-        average_across_timesteps=False,
-        average_across_batch=True
-    )
-
-    # update the cost variables
-    self._cost = cost = tf.reduce_sum(loss)
-    self._final_state = state
-
-    if not is_training:
-      return
-
-    self._lr = tf.Variable(0.0, trainable=False)
-    tvars = tf.trainable_variables()
-    grads, _ = tf.clip_by_global_norm(tf.gradients(cost, tvars),
-                                      config.max_grad_norm)
-    optimizer = tf.train.GradientDescentOptimizer(self._lr)
-    self._train_op = optimizer.apply_gradients(
-        zip(grads, tvars),
-        global_step=tf.contrib.framework.get_or_create_global_step())
+    self._train_op = tf.contrib.layers.optimize_loss(
+            loss=loss, global_step=tf.contrib.framework.get_global_step(),
+            learning_rate=0.001, optimizer="Adam"
+            )
 
     self._new_lr = tf.placeholder(
         tf.float32, shape=[], name="new_learning_rate")
@@ -118,18 +265,6 @@ class ConditionalModel(object):
 
   def assign_lr(self, session, lr_value):
     session.run(self._lr_update, feed_dict={self._new_lr: lr_value})
-
-  @property
-  def input(self):
-    return self._input
-
-  @property
-  def initial_state(self):
-    return self._initial_state
-
-  @property
-  def cost(self):
-    return self._cost
 
   @property
   def final_state(self):
@@ -142,7 +277,7 @@ class ConditionalModel(object):
   @property
   def train_op(self):
     return self._train_op
-
+"""
 
 class SmallConfig(object):
   """Small config."""
@@ -160,140 +295,5 @@ class SmallConfig(object):
   vocab_size = 10000
 
 
-
-mode = FALGS.train
-dir = FLAGS.data_path
-
-
-# Set file names
-file_train_instances = dir + "/train_stances.csv"
-file_train_bodies = dir + "/train_bodies.csv"
-file_test_instances = dir + "/test_stances.csv"
-file_test_bodies = dir + "/test_bodies.csv"
-file_predictions = dir + '/predictions_test.csv'
-file_test_labels = dir + "/test_stances.csv"
-
-
-# Initialise hyperparameters
-r = random.Random()
-lim_unigram = 5000
-target_size = 4
-hidden_size = 100
-train_keep_prob = 0.6
-l2_alpha = 0.00001
-learn_rate = 0.01
-clip_ratio = 5
-batch_size_train = 500
-epochs = 90
-use_hidden = input('Use hidden (y / n)? ') == 'y'
-use_cosine = input('Use cosine (y / n)? ') == 'y'
-just_cosine = input('Just cosine (y / n)? ') == 'y'
-
-# Load data sets
-raw_train = FNCData(file_train_instances, file_train_bodies)
-raw_test = FNCData(file_test_instances, file_test_bodies)
-n_train = len(raw_train.instances)
-print('loaded {} instances'.format(n_train))
-
-# Process data sets
-train_heads, train_bodies, train_stances = raw_data_to_embeding(raw_train)
-pdb.set_trace()
-train_set, train_stances, bow_vectorizer, tfreq_vectorizer, tfidf_vectorizer = \
-    pipeline_train(raw_train, raw_test, lim_unigram=lim_unigram, use_cosine=use_cosine, just_cosine=just_cosine)
-feature_size = len(train_set[0])
-
-print("feature_size is {}".format(feature_size))
-test_set, test_stances = pipeline_test(raw_test, bow_vectorizer, tfreq_vectorizer, tfidf_vectorizer, use_cosine=use_cosine, just_cosine=just_cosine)
-print('processed datasets')
-
-# Define model
-
-# Create placeholders
-features_pl = tf.placeholder(tf.float32, [None, feature_size], 'features')
-stances_pl = tf.placeholder(tf.int64, [None], 'stances')
-keep_prob_pl = tf.placeholder(tf.float32)
-
-# Infer batch size
-batch_size = tf.shape(features_pl)[0]
-
-# Define multi-layer perceptron
-if use_hidden:
-    hidden_layer = tf.nn.dropout(tf.nn.relu(tf.contrib.layers.linear(features_pl, hidden_size)), keep_prob=keep_prob_pl)
-    logits_flat = tf.nn.dropout(tf.contrib.layers.linear(hidden_layer, target_size), keep_prob=keep_prob_pl)
-elif not just_cosine:
-    logits_flat = tf.nn.dropout(tf.contrib.layers.linear(features_pl, target_size), keep_prob=keep_prob_pl)
-else:
-    logits_flat = tf.contrib.layers.linear(features_pl, target_size)
-    
-logits = tf.reshape(logits_flat, [batch_size, target_size])
-
-# Define L2 loss
-tf_vars = tf.trainable_variables()
-l2_loss = tf.add_n([tf.nn.l2_loss(v) for v in tf_vars if 'bias' not in v.name]) * l2_alpha
-
-# Define overall loss
-loss = tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(logits, stances_pl) + l2_loss)
-
-summary = tf.summary.scalar('loss', tf.reduce_mean(loss))
-
-
-
-# Define prediction
-softmaxed_logits = tf.nn.softmax(logits)
-predict = tf.arg_max(softmaxed_logits, 1)
-
-
-# Load model
-if mode == 'load':
-    with tf.Session() as sess:
-        load_model(sess)
-
-
-        # Predict
-        test_feed_dict = {features_pl: test_set, keep_prob_pl: 1.0}
-        test_pred = sess.run(predict, feed_dict=test_feed_dict)
-    print('loaded the model')
-
-# Train model
-if mode == 'train':
-    print('training...')
-    # Define optimiser
-    opt_func = tf.train.AdamOptimizer(learn_rate)
-    grads, _ = tf.clip_by_global_norm(tf.gradients(loss, tf_vars), clip_ratio)
-    opt_op = opt_func.apply_gradients(zip(grads, tf_vars))
-
-    # Perform training
-    with tf.Session() as sess:
-        train_writer = tf.summary.FileWriter("./summaries_dir" + '/train_' + dir,
-                                      sess.graph)
-        test_writer = tf.summary.FileWriter("./summaries_dir" + '/test_' + dir,
-                                      sess.graph)
-        sess.run(tf.global_variables_initializer())
-
-        for epoch in tqdm(range(epochs)):
-            total_loss = 0
-            indices = list(range(n_train))
-            r.shuffle(indices)
-
-            for i in range(n_train // batch_size_train):
-                batch_indices = indices[i * batch_size_train: (i + 1) * batch_size_train]
-                batch_features = [train_set[i] for i in batch_indices]
-                batch_stances = [train_stances[i] for i in batch_indices]
-
-                batch_feed_dict = {features_pl: batch_features, stances_pl: batch_stances, keep_prob_pl: train_keep_prob}
-                _, current_loss, s = sess.run([opt_op, loss, summary], feed_dict=batch_feed_dict)
-                total_loss += current_loss
-                train_writer.add_summary(s, epoch*(n_train // batch_size_train)+i)
-            test_feed_dict = {features_pl: test_set, stances_pl: test_stances, keep_prob_pl: 1.0}
-            s = sess.run(summary, feed_dict=test_feed_dict)
-            test_writer.add_summary(s, epoch*(n_train // batch_size_train))
-            
-
-        # Predict
-        test_feed_dict = {features_pl: test_set, keep_prob_pl: 1.0}
-        test_pred = sess.run(predict, feed_dict=test_feed_dict)
-
-
-# Save predictions
-save_predictions(test_pred, file_predictions)
-calc_error(file_predictions, file_test_labels)
+if __name__ == "__main__":
+    tf.app.run()

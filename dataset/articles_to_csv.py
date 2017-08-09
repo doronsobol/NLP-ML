@@ -8,8 +8,8 @@ train_files_agree = glob.glob('./train/positive/*.txt')
 test_files_agree = glob.glob('./test/positive/*.txt')
 
 
-train_files_discuss = glob.glob('./train/sub_one_word/*.txt')
-test_files_discuss = glob.glob('./test/sub_one_word/*.txt')
+train_files_discuss = glob.glob('./train/mix_within/*.txt')
+test_files_discuss = glob.glob('./test/mix_within/*.txt')
 
 train_files_disagree = []
 test_files_disagree = []
