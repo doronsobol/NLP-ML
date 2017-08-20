@@ -14,11 +14,11 @@
 
 
 # Import relevant packages and modules
-from util import *
+#from util import *
 import random
 import tensorflow as tf
 from tqdm import tqdm
-from test_score import calc_error
+#from test_score import calc_error
 import pdb
 import functools
 # Prompt for mode
@@ -26,6 +26,7 @@ from tensorflow.contrib.learn.python.learn.estimators import model_fn as model_f
 import tensorflow.contrib.learn as learn
 from gensim.models.keyedvectors import KeyedVectors
 from nltk import word_tokenize
+from tensorflow.python import debug as tf_debug
 
 tf.logging.set_verbosity(tf.logging.INFO)
 
@@ -46,14 +47,15 @@ print("loading model")
 model={}
 batch_size = 32
 label_ref = {'agree': 0, 'disagree': 1, 'discuss': 2, 'unrelated': 3}
-
-filenames_train = tf.train.match_filenames_once(FLAGS.data_path + "/train_%d.tfrecords")
-filenames_test = tf.test.match_filenames_once(FLAGS.data_path + "/test_%d.tfrecords")
+#g = tf.Graph()
+#with g.as_default():
+filenames_train = [FLAGS.data_path + "/train_{}.tfrecords".format(i) for i in range(3)]
+filenames_test = [FLAGS.data_path + "/test_{}.tfrecords".format(i) for i in range(3)]
 embedding_dim = 300
 
 def read_file_queue(filename_queue):
-    reader = tf.TFRecordReader()
-    _, serialized_example = reader.read(filename_queue)
+    reader = tf.TFRecordReader(name="TF_record_reader")
+    _, serialized_example = reader.read(filename_queue, name="read_op")
     context_features={
         'head_len': tf.FixedLenFeature([], tf.int64),
         'body_len': tf.FixedLenFeature([], tf.int64),
@@ -66,16 +68,27 @@ def read_file_queue(filename_queue):
     context_parsed, sequence_parsed = tf.parse_single_sequence_example(
             serialized=serialized_example,
             context_features=context_features,
-            sequence_features=sequence_features
+            sequence_features=sequence_features,
+            name="basic_parsing"
             )
-
+    
+    #context = tf.contrib.learn.run_n(context_parsed, n=1, feed_dict=None)
+    #print(context)
+    #sequence = tf.contrib.learn.run_n(sequence_parsed, n=1, feed_dict=None)
+    #print(sequence[0])
     head_len = context_parsed['head_len']
-    head = tf.reshape(sequence_parsed['head'],[head_len, embedding_dim])
+    raw_head = sequence_parsed['head']
+    #raw_head = tf.Print(raw_head,[ raw_head ])
+    #return raw_head_p
+    #tf.contrib.learn.run_n(raw_head_p, n=1, feed_dict=None)
+    #print(pppp)
+    head = tf.reshape(raw_head,[-1, embedding_dim])
     body_len = context_parsed['body_len']
-    body = tf.reshape(sequence_parsed['body'],[body_len, embedding_dim])
+    body = tf.reshape(sequence_parsed['body'],[-1, embedding_dim])
     label = context_parsed['label']
-    print(body_len)
     return head, head_len, body, body_len, label
+
+
 
 def input_pipeline(filenames, batch_size, num_epochs=None):
     filename_queue = tf.train.string_input_producer(
@@ -83,18 +96,26 @@ def input_pipeline(filenames, batch_size, num_epochs=None):
     head, head_len, body, body_len, label = read_file_queue(filename_queue)
     min_after_dequeue = 10000
     capacity = min_after_dequeue + 3 * batch_size
+    input_tensors = [head, head_len, body, body_len, label]
+    names=["head", "head_len","body", "body_len", "label"]
+    in_dict = dict(zip(names, input_tensors))
     #tf.PaddingFIFOQueue(capacity=capacity,
     batched_data = tf.train.batch(
-            tensors=[head, head_len, body, body_len, label],
+            tensors=in_dict,
             batch_size=batch_size,
             capacity=capacity,
-            names=["head", "head_len","body", "body_len", "label"],
             #dtypes=[tf.float32, tf.int64, tf.float32, tf.int64, tf.int64],
             dynamic_pad=True,
-            shapes=[[None, embedding_dim], [], [None, embedding_dim], [], []], name="padding queue")
+            shapes=[[None, embedding_dim], [], [None, embedding_dim], [], []], name="my_padding_queue")
     return batched_data, batched_data["label"]
 
-
+#filename_queue = tf.train.string_input_producer(filenames_train[:4], num_epochs=None, shuffle=True)
+#sess = tf.InteractiveSession()
+#sess.run(tf.global_variables_initializer())
+#tf.train.start_queue_runners(sess=sess)
+#sess = tf_debug.LocalCLIDebugWrapperSession(sess, ui_type="curses")
+#sess.run(read_file_queue(filename_queue))
+"""
 def input_fn():
     return_dict = {}
     data_body = []
@@ -135,7 +156,7 @@ def input_fn():
     labels = tf.constant(labels)
     print(return_dict["input_head"].shape)
     return return_dict, labels
-    
+"""    
 
 def data_type():
     return tf.float16 if FLAGS.use_fp16 else tf.float32
@@ -157,8 +178,8 @@ def extract_axis_1(data, ind):
 
 def conditional_embedding_model_fn(mode, features, labels):#, params):
     #hidden_size = params["hidden_size"]
-    input_head = features["input_head"]
-    input_body = features["input_body"]
+    input_head = features["head"]
+    input_body = features["body"]
     seq_len_head = features["head_len"]
     seq_len_body = features["body_len"]
     num_of_outputs = 4
@@ -204,17 +225,20 @@ def conditional_embedding_model_fn(mode, features, labels):#, params):
     return tf.estimator.EstimatorSpec(
             mode=mode, predictions=predictions, loss=loss, train_op=train_op)
 
+train_input_fn = functools.partial(input_pipeline ,filenames=filenames_train, batch_size=32)
 print("starting to fit")
 tensors_to_log = {"probabilities": "softmax_tensor"}
 logging_hook = tf.train.LoggingTensorHook(
               tensors=tensors_to_log, every_n_iter=50)
+hooks = [tf_debug.LocalCLIDebugHook()]
+
 classifier = tf.estimator.Estimator(
-              model_fn=conditional_embedding_model_fn, model_dir="/tmp/d_rnn_nodel_dir")
+              model_fn=conditional_embedding_model_fn, model_dir=FLAGS.save_path)
 metrics = { 
         "accuracy": tf.contrib.learn.MetricSpec(metric_fn=tf.metrics.accuracy, prediction_key="classes"),
         }
-classifier.train(input_fn=functools.partial(input_pipeline ,filenames=filenames_train, batch_size=32),
-        steps=20000, hooks=[logging_hook])
+#classifier.train(input_fn=train_input_fn, steps=20000, hooks=hooks)
+classifier.train(input_fn=train_input_fn, steps=20000, hooks=[logging_hook])
 """
 class ConditionalModel(object):
 
