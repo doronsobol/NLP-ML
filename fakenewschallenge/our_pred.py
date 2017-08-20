@@ -38,6 +38,8 @@ tf.app.flags.DEFINE_bool("use_fp16", False,
                           "Data type to use")
 tf.app.flags.DEFINE_string("save_path", None,
                             "Model output directory.")
+tf.app.flags.DEFINE_string("log_dir", "log",
+                            "Where the tensorboard files are located.")
 tf.app.flags.DEFINE_string("data_path", None,
                             "Where the training/test data is stored.")
 
@@ -205,11 +207,11 @@ def conditional_embedding_model_fn(mode, features, labels):#, params):
 
     loss = None
     train_op = None
-
     if mode != learn.ModeKeys.INFER:
         loss = tf.losses.sparse_softmax_cross_entropy(
                 labels=labels,logits=logits
                 )
+        tf.summary.scalar("summary_loss", loss)
     if mode == learn.ModeKeys.TRAIN:
         train_op = tf.contrib.layers.optimize_loss(
                 loss=loss,
@@ -222,6 +224,7 @@ def conditional_embedding_model_fn(mode, features, labels):#, params):
             "probabilities": tf.nn.softmax(
                 logits, name="softmax_tensor")
             }
+    tf.summary.merge_all()
     return tf.estimator.EstimatorSpec(
             mode=mode, predictions=predictions, loss=loss, train_op=train_op)
 
@@ -229,8 +232,14 @@ train_input_fn = functools.partial(input_pipeline ,filenames=filenames_train, ba
 print("starting to fit")
 tensors_to_log = {"probabilities": "softmax_tensor"}
 logging_hook = tf.train.LoggingTensorHook(
-              tensors=tensors_to_log, every_n_iter=50)
-hooks = [tf_debug.LocalCLIDebugHook()]
+              tensors=tensors_to_log, every_n_iter=10)
+#a = tf.summary.merge_all()
+summarySaverHook = tf.train.SummarySaverHook(save_secs=2, output_dir=FLAGS.log_dir, scaffold=tf.train.Scaffold(), summary_op=tf.summary.merge_all())
+#hooks = [tf_debug.LocalCLIDebugHook()]
+
+#validation_monitor = tf.contrib.learn.monitors.ValidationMonitor( test_set.data, test_set.target, every_n_steps=50)
+
+
 
 classifier = tf.estimator.Estimator(
               model_fn=conditional_embedding_model_fn, model_dir=FLAGS.save_path)
@@ -238,7 +247,7 @@ metrics = {
         "accuracy": tf.contrib.learn.MetricSpec(metric_fn=tf.metrics.accuracy, prediction_key="classes"),
         }
 #classifier.train(input_fn=train_input_fn, steps=20000, hooks=hooks)
-classifier.train(input_fn=train_input_fn, steps=20000, hooks=[logging_hook])
+classifier.train(input_fn=train_input_fn, steps=20000, hooks=[summarySaverHook])
 """
 class ConditionalModel(object):
 
