@@ -17,6 +17,7 @@
 #from util import *
 import random
 import tensorflow as tf
+from tensorflow import TensorShape, Dimension
 from tqdm import tqdm
 #from test_score import calc_error
 import pdb
@@ -42,6 +43,8 @@ tf.app.flags.DEFINE_string("log_dir", "log",
                             "Where the tensorboard files are located.")
 tf.app.flags.DEFINE_string("data_path", None,
                             "Where the training/test data is stored.")
+tf.app.flags.DEFINE_integer("batch_size", 32,
+                            "batch size (default is 32).")
 
 #filename_queue = tf.train.string_input_producer([ FLAGS.data_path + "/data.csv"])
 print("loading model")
@@ -55,9 +58,7 @@ filenames_train = [FLAGS.data_path + "/train_{}.tfrecords".format(i) for i in ra
 filenames_test = [FLAGS.data_path + "/test_{}.tfrecords".format(i) for i in range(3)]
 embedding_dim = 300
 
-def read_file_queue(filename_queue):
-    reader = tf.TFRecordReader(name="TF_record_reader")
-    _, serialized_example = reader.read(filename_queue, name="read_op")
+def parse_serialized(serialized_example):
     context_features={
         'head_len': tf.FixedLenFeature([], tf.int64),
         'body_len': tf.FixedLenFeature([], tf.int64),
@@ -88,19 +89,24 @@ def read_file_queue(filename_queue):
     body_len = context_parsed['body_len']
     body = tf.reshape(sequence_parsed['body'],[-1, embedding_dim])
     label = context_parsed['label']
-    return head, head_len, body, body_len, label
+    
+    input_tensors = [head, head_len, body, body_len, label]
+    names=["head", "head_len","body", "body_len", "label"]
+    in_dict = dict(zip(names, input_tensors))
+    return in_dict, label
+
+def read_file_queue(filename_queue):
+    reader = tf.TFRecordReader(name="TF_record_reader")
+    _, serialized_example = reader.read(filename_queue, name="read_op")
 
 
 
 def input_pipeline(filenames, batch_size, num_epochs=None):
     filename_queue = tf.train.string_input_producer(
                    filenames, num_epochs=num_epochs, shuffle=True)
-    head, head_len, body, body_len, label = read_file_queue(filename_queue)
+    in_dict, label = read_file_queue(filename_queue)
     min_after_dequeue = 10000
     capacity = min_after_dequeue + 3 * batch_size
-    input_tensors = [head, head_len, body, body_len, label]
-    names=["head", "head_len","body", "body_len", "label"]
-    in_dict = dict(zip(names, input_tensors))
     #tf.PaddingFIFOQueue(capacity=capacity,
     batched_data = tf.train.batch(
             tensors=in_dict,
@@ -110,6 +116,65 @@ def input_pipeline(filenames, batch_size, num_epochs=None):
             dynamic_pad=True,
             shapes=[[None, embedding_dim], [], [None, embedding_dim], [], []], name="my_padding_queue")
     return batched_data, batched_data["label"]
+
+
+
+def dataset_input_fn(filenames):
+    dataset = tf.contrib.data.TFRecordDataset(filenames)
+
+    #Parsing Function
+    def parse_serialized(serialized_example):
+        context_features={
+            'head_len': tf.FixedLenFeature([], tf.int64),
+            'body_len': tf.FixedLenFeature([], tf.int64),
+            'label': tf.FixedLenFeature([], tf.int64)
+            }
+        sequence_features = {
+                "head": tf.FixedLenSequenceFeature([], dtype=tf.float32),
+                "body": tf.FixedLenSequenceFeature([], dtype=tf.float32)
+                }
+        context_parsed, sequence_parsed = tf.parse_single_sequence_example(
+                serialized=serialized_example,
+                context_features=context_features,
+                sequence_features=sequence_features,
+                name="basic_parsing"
+                )
+        
+        #context = tf.contrib.learn.run_n(context_parsed, n=1, feed_dict=None)
+        #print(context)
+        #sequence = tf.contrib.learn.run_n(sequence_parsed, n=1, feed_dict=None)
+        #print(sequence[0])
+        head_len = context_parsed['head_len']
+        raw_head = sequence_parsed['head']
+        #raw_head = tf.Print(raw_head,[ raw_head ])
+        #return raw_head_p
+        #tf.contrib.learn.run_n(raw_head_p, n=1, feed_dict=None)
+        #print(pppp)
+        head = tf.reshape(raw_head,[-1, embedding_dim])
+        body_len = context_parsed['body_len']
+        body = tf.reshape(sequence_parsed['body'],[-1, embedding_dim])
+        label = context_parsed['label']
+        
+        input_tensors = [head, head_len, body, body_len]
+        names=["head", "head_len","body", "body_len"]
+        in_dict = dict(zip(names, input_tensors))
+        return in_dict, label
+
+    dataset = dataset.map(parse_serialized)
+    dataset = dataset.shuffle(buffer_size=10000)
+    dataset = dataset.padded_batch(batch_size=FLAGS.batch_size,
+            padded_shapes=({
+                'body': TensorShape([Dimension(None), Dimension(300)]), 
+                'body_len': TensorShape([]), 
+                'head': TensorShape([Dimension(None), Dimension(300)]), 
+                'head_len': TensorShape([])}, 
+                TensorShape([]))
+            )
+    dataset = dataset.repeat()
+    iterator = dataset.make_one_shot_iterator()
+    features, labels = iterator.get_next()
+
+    return features, labels
 
 #filename_queue = tf.train.string_input_producer(filenames_train[:4], num_epochs=None, shuffle=True)
 #sess = tf.InteractiveSession()
@@ -218,17 +283,28 @@ def conditional_embedding_model_fn(mode, features, labels):#, params):
                 global_step=tf.contrib.framework.get_global_step(),
                 learning_rate=0.001,
                 optimizer="Adam")
+    softmax = tf.nn.softmax(logits, name="softmax_tensor")
+    classes = tf.argmax(input=logits, axis=1)
     predictions = {
-            "classes": tf.argmax(
-                input=logits, axis=1),
-            "probabilities": tf.nn.softmax(
-                logits, name="softmax_tensor")
+            "classes": classes,
+            "probabilities": softmax
             }
     tf.summary.merge_all()
+    eval_metric_ops = {
+            "Accuracy": tf.metrics.accuracy(labels, tf.cast(classes, tf.int64)),
+            "Percision": tf.metrics.precision(labels, tf.cast(classes, tf.int64)),
+            "Recall": tf.metrics.recall(labels, tf.cast(classes, tf.int64))
+            }
     return tf.estimator.EstimatorSpec(
-            mode=mode, predictions=predictions, loss=loss, train_op=train_op)
+            mode=mode, 
+            predictions=predictions, 
+            loss=loss, 
+            train_op=train_op,
+            eval_metric_ops=eval_metric_ops)
+    #return tf.estimator.EstimatorSpec(
+    #        mode=mode, predictions=predictions, loss=loss, train_op=train_op)
 
-train_input_fn = functools.partial(input_pipeline ,filenames=filenames_train, batch_size=32)
+train_input_fn = functools.partial(dataset_input_fn ,filenames=filenames_train)
 print("starting to fit")
 tensors_to_log = {"probabilities": "softmax_tensor"}
 logging_hook = tf.train.LoggingTensorHook(
