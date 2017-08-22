@@ -151,6 +151,7 @@ def train(word2vec, dataset, parameters):
         batcher = Batcher(word2vec=word2vec)
         train_batches = batcher.batch_generator(dataset=dataset["train"], num_epochs=parameters["num_epochs"], batch_size=parameters["batch_size"]["train"], sequence_length=parameters["sequence_length"])
         num_step_by_epoch = int(math.ceil(len(dataset["train"]["targets"]) / parameters["batch_size"]["train"]))
+        last_epoch=-1
         for train_step, (train_batch, epoch) in enumerate(train_batches):
             feed_dict = {
                             premises_ph: np.transpose(train_batch["premises"], (1, 0, 2)),
@@ -161,10 +162,10 @@ def train(word2vec, dataset, parameters):
 
             _, summary_str, train_loss, train_accuracy = sess.run([train_op, train_summary_op, loss, accuracy], feed_dict=feed_dict)
             train_summary_writer.add_summary(summary_str, train_step)
-            if train_step % 100 == 0:
+            if train_step % 100 == 0 or epoch != last_epoch:
                 sys.stdout.write("\rTRAIN | epoch={0}/{1}, step={2}/{3} | loss={4:.2f}, accuracy={5:.2f}%   ".format(epoch + 1, parameters["num_epochs"], train_step % num_step_by_epoch, num_step_by_epoch, train_loss, 100. * train_accuracy))
                 sys.stdout.flush()
-            if train_step % 5000 == 0:
+            if (train_step % 5000 == 0) or (train_step==len(dataset["train"]["targets"])) or epoch != last_epoch:
                 test_batches = batcher.batch_generator(dataset=dataset["test"], num_epochs=1, batch_size=parameters["batch_size"]["test"], sequence_length=parameters["sequence_length"])
                 for test_step, (test_batch, _) in enumerate(test_batches):
                     feed_dict = {
@@ -181,5 +182,7 @@ def train(word2vec, dataset, parameters):
                     break
             if train_step % 5000 == 0:
                 saver.save(sess, save_path=savepath, global_step=train_step)
+
+            last_epoch=epoch
         print ("")
 
