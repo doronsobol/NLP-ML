@@ -54,8 +54,8 @@ batch_size = 32
 label_ref = {'agree': 0, 'disagree': 1, 'discuss': 2, 'unrelated': 3}
 #g = tf.Graph()
 #with g.as_default():
-filenames_train = [FLAGS.data_path + "/train_{}.tfrecords".format(i) for i in range(3)]
-filenames_test = [FLAGS.data_path + "/test_{}.tfrecords".format(i) for i in range(3)]
+filenames_train = [FLAGS.data_path + "/train_{}.tfrecords".format(i) for i in range(83)]
+filenames_test = [FLAGS.data_path + "/test_{}.tfrecords".format(i) for i in range(10)]
 embedding_dim = 300
 
 def parse_serialized(serialized_example):
@@ -75,16 +75,9 @@ def parse_serialized(serialized_example):
             name="basic_parsing"
             )
     
-    #context = tf.contrib.learn.run_n(context_parsed, n=1, feed_dict=None)
-    #print(context)
-    #sequence = tf.contrib.learn.run_n(sequence_parsed, n=1, feed_dict=None)
-    #print(sequence[0])
     head_len = context_parsed['head_len']
     raw_head = sequence_parsed['head']
-    #raw_head = tf.Print(raw_head,[ raw_head ])
-    #return raw_head_p
-    #tf.contrib.learn.run_n(raw_head_p, n=1, feed_dict=None)
-    #print(pppp)
+    
     head = tf.reshape(raw_head,[-1, embedding_dim])
     body_len = context_parsed['body_len']
     body = tf.reshape(sequence_parsed['body'],[-1, embedding_dim])
@@ -107,22 +100,20 @@ def input_pipeline(filenames, batch_size, num_epochs=None):
     in_dict, label = read_file_queue(filename_queue)
     min_after_dequeue = 10000
     capacity = min_after_dequeue + 3 * batch_size
-    #tf.PaddingFIFOQueue(capacity=capacity,
+    
     batched_data = tf.train.batch(
             tensors=in_dict,
             batch_size=batch_size,
             capacity=capacity,
-            #dtypes=[tf.float32, tf.int64, tf.float32, tf.int64, tf.int64],
             dynamic_pad=True,
             shapes=[[None, embedding_dim], [], [None, embedding_dim], [], []], name="my_padding_queue")
     return batched_data, batched_data["label"]
 
 
 
-def dataset_input_fn(filenames):
+def dataset_input_fn(filenames, repeat):
     dataset = tf.contrib.data.TFRecordDataset(filenames)
 
-    #Parsing Function
     def parse_serialized(serialized_example):
         context_features={
             'head_len': tf.FixedLenFeature([], tf.int64),
@@ -140,16 +131,8 @@ def dataset_input_fn(filenames):
                 name="basic_parsing"
                 )
         
-        #context = tf.contrib.learn.run_n(context_parsed, n=1, feed_dict=None)
-        #print(context)
-        #sequence = tf.contrib.learn.run_n(sequence_parsed, n=1, feed_dict=None)
-        #print(sequence[0])
         head_len = context_parsed['head_len']
         raw_head = sequence_parsed['head']
-        #raw_head = tf.Print(raw_head,[ raw_head ])
-        #return raw_head_p
-        #tf.contrib.learn.run_n(raw_head_p, n=1, feed_dict=None)
-        #print(pppp)
         head = tf.reshape(raw_head,[-1, embedding_dim])
         body_len = context_parsed['body_len']
         body = tf.reshape(sequence_parsed['body'],[-1, embedding_dim])
@@ -170,60 +153,11 @@ def dataset_input_fn(filenames):
                 'head_len': TensorShape([])}, 
                 TensorShape([]))
             )
-    dataset = dataset.repeat()
+    dataset = dataset.repeat(repeat)
     iterator = dataset.make_one_shot_iterator()
     features, labels = iterator.get_next()
 
     return features, labels
-
-#filename_queue = tf.train.string_input_producer(filenames_train[:4], num_epochs=None, shuffle=True)
-#sess = tf.InteractiveSession()
-#sess.run(tf.global_variables_initializer())
-#tf.train.start_queue_runners(sess=sess)
-#sess = tf_debug.LocalCLIDebugWrapperSession(sess, ui_type="curses")
-#sess.run(read_file_queue(filename_queue))
-"""
-def input_fn():
-    return_dict = {}
-    data_body = []
-    data_head = []
-    head_len = []
-    body_len = []
-    labels = []
-    while len(body_len) < batch_size:
-        for i in r:
-            data_body.append(np.array([model[x] for x in word_tokenize(i["body"]) if x in model]))
-            data_head.append(np.array([model[x] for x in word_tokenize(i["head"]) if x in model]))
-            body_len.append(data_body[-1].shape[0])
-            head_len.append(data_head[-1].shape[0])
-            labels.append(label_ref[i["stance"]])
-            if len(body_len) >= batch_size:
-                break
-        if len(body_len) >= batch_size:
-            break
-        table = open(filename, "r", encoding='utf-8')
-        r = DictReader(table)
-
-    body_len = np.array(body_len)
-    head_len = np.array(head_len)
-    emmbedding_size = data_body[0].shape[1]
-    maxlen_body = np.amax(body_len)
-    maxlen_head = np.amax(head_len)
-
-    for i, b in enumerate(data_body):
-        data_body[i] = np.lib.pad(b, [(0,maxlen_body-b.shape[0]),(0,0)], 'constant', constant_values=0)
-    data_body_np = np.stack(data_body)
-    for i, b in enumerate(data_head):
-        data_head[i] = np.lib.pad(b, [(0,maxlen_head-b.shape[0]),(0,0)], 'constant', constant_values=0)
-    data_head_np = np.stack(data_head)
-    return_dict["input_head"] = tf.constant(data_head_np)
-    return_dict["input_body"] = tf.constant(data_body_np)
-    return_dict["head_len"] = tf.constant(head_len)
-    return_dict["body_len"] = tf.constant(body_len)
-    labels = tf.constant(labels)
-    print(return_dict["input_head"].shape)
-    return return_dict, labels
-"""    
 
 def data_type():
     return tf.float16 if FLAGS.use_fp16 else tf.float32
@@ -241,17 +175,82 @@ def extract_axis_1(data, ind):
     res = tf.gather_nd(data, indices)
     return res
 
-
-
-def conditional_embedding_model_fn(mode, features, labels):#, params):
-    #hidden_size = params["hidden_size"]
+def conv_net_model_fn(features, labels, mode):
     input_head = features["head"]
     input_body = features["body"]
     seq_len_head = features["head_len"]
     seq_len_body = features["body_len"]
     num_of_outputs = 4
-    #head_cell = tf.contrib.rnn.LSTMCell(600)
-    #body_cell = tf.contrib.rnn.LSTMCell(600)
+    num_of_filters = 256
+    is_training = (mode == learn.ModeKeys.TRAIN)
+ 
+    def conv_dropout_pool(input, filters, name, reuse, pool=False):
+        conv = tf.layers.conv1d(inputs=input, filters=filters,
+                kernel_size=3, activation=tf.nn.relu, name=name+"_conv", reuse=reuse)
+        dropout = tf.layers.dropout(inputs=conv, training=is_training, name=name+"_dropout")
+        if pool:
+            return tf.layers.max_pooling1d(inputs=dropout, pool_size=2, strides=2, name=name+"_pool")
+        else:
+            return dropout
+
+    def conv_layers(input, filters, reuse):
+        l1 = conv_dropout_pool(input, filters, "layer_1", reuse, True)
+        l2 = conv_dropout_pool(l1, filters, "layer_2", reuse, True)
+        l3 = conv_dropout_pool(l2, filters*2, "layer_3", reuse, True)
+        l4 = conv_dropout_pool(l2, filters*2, "layer_4", reuse)
+        l5 = conv_dropout_pool(l2, filters*3, "layer_5", reuse)
+        return l5
+
+    body_conv = conv_layers(input_body, num_of_filters, False)
+    head_conv = conv_layers(input_head, num_of_filters, True)
+    max_body = tf.reduce_max(body_conv, axis=1)
+    max_head = tf.reduce_max(head_conv, axis=1)
+
+    full = tf.concat([max_body, max_head], axis=1)
+
+    dense_1 = tf.layers.dense(inputs=full, units=1024, activation=tf.nn.relu)
+    dense_2 = tf.layers.dense(inputs=dense_1, units=1024, activation=tf.nn.relu)
+    dense_3 = tf.layers.dense(inputs=dense_2, units=1024, activation=tf.nn.relu)
+    logits = tf.layers.dense(inputs=dense_3, units=num_of_outputs, activation=None)
+
+    loss = None
+    train_op = None
+    if mode != learn.ModeKeys.INFER:
+        loss = tf.losses.sparse_softmax_cross_entropy(
+                labels=labels,logits=logits
+                )
+        tf.summary.scalar("summary_loss", loss)
+    if mode == learn.ModeKeys.TRAIN:
+        train_op = tf.contrib.layers.optimize_loss(
+                loss=loss,
+                global_step=tf.contrib.framework.get_global_step(),
+                learning_rate=0.001,
+                optimizer="Adam")
+    softmax = tf.nn.softmax(logits, name="softmax_tensor")
+    classes = tf.argmax(input=logits, axis=1)
+    predictions = {
+            "classes": classes,
+            "probabilities": softmax
+            }
+    tf.summary.merge_all()
+    eval_metric_ops = {
+            "Accuracy": tf.metrics.accuracy(labels, classes)
+            }
+    return learn.ModelFnOps(
+            mode=mode, 
+            predictions=predictions, 
+            loss=loss, 
+            train_op=train_op,
+            eval_metric_ops=eval_metric_ops)
+  
+
+def conditional_embedding_model_fn(features, labels, mode):#, params):
+    input_head = features["head"]
+    input_body = features["body"]
+    seq_len_head = features["head_len"]
+    seq_len_body = features["body_len"]
+    num_of_outputs = 4
+    
     with tf.variable_scope('head'):
         head_cell = tf.nn.rnn_cell.LSTMCell(600)
         outputs_head, final_state_head = tf.nn.dynamic_rnn(
@@ -291,39 +290,37 @@ def conditional_embedding_model_fn(mode, features, labels):#, params):
             }
     tf.summary.merge_all()
     eval_metric_ops = {
-            "Accuracy": tf.metrics.accuracy(labels, tf.cast(classes, tf.int64)),
-            "Percision": tf.metrics.precision(labels, tf.cast(classes, tf.int64)),
-            "Recall": tf.metrics.recall(labels, tf.cast(classes, tf.int64))
+            "Accuracy": tf.metrics.accuracy(labels, classes)
             }
-    return tf.estimator.EstimatorSpec(
+    return learn.ModelFnOps(
             mode=mode, 
             predictions=predictions, 
             loss=loss, 
             train_op=train_op,
             eval_metric_ops=eval_metric_ops)
-    #return tf.estimator.EstimatorSpec(
-    #        mode=mode, predictions=predictions, loss=loss, train_op=train_op)
 
-train_input_fn = functools.partial(dataset_input_fn ,filenames=filenames_train)
+train_input_fn = functools.partial(dataset_input_fn ,filenames=filenames_train, repeat=-1)
+eval_input_fn = functools.partial(dataset_input_fn ,filenames=filenames_test, repeat=1)
+
 print("starting to fit")
 tensors_to_log = {"probabilities": "softmax_tensor"}
 logging_hook = tf.train.LoggingTensorHook(
               tensors=tensors_to_log, every_n_iter=10)
 #a = tf.summary.merge_all()
-summarySaverHook = tf.train.SummarySaverHook(save_secs=2, output_dir=FLAGS.log_dir, scaffold=tf.train.Scaffold(), summary_op=tf.summary.merge_all())
+#summarySaverHook = tf.train.SummarySaverHook(save_secs=2, output_dir=FLAGS.log_dir, scaffold=tf.train.Scaffold(), summary_op=tf.summary.merge_all())
 #hooks = [tf_debug.LocalCLIDebugHook()]
 
 #validation_monitor = tf.contrib.learn.monitors.ValidationMonitor( test_set.data, test_set.target, every_n_steps=50)
 
 
 
-classifier = tf.estimator.Estimator(
-              model_fn=conditional_embedding_model_fn, model_dir=FLAGS.save_path)
-metrics = { 
-        "accuracy": tf.contrib.learn.MetricSpec(metric_fn=tf.metrics.accuracy, prediction_key="classes"),
-        }
+#classifier = tf.estimator.Estimator(
+#classifier = learn.Estimator(model_fn=conditional_embedding_model_fn, model_dir=FLAGS.save_path)
+classifier = learn.Estimator(model_fn=conv_net_model_fn, model_dir=FLAGS.save_path)
 #classifier.train(input_fn=train_input_fn, steps=20000, hooks=hooks)
-classifier.train(input_fn=train_input_fn, steps=20000, hooks=[summarySaverHook])
+experiment = learn.Experiment(estimator=classifier, train_input_fn=train_input_fn, eval_input_fn=eval_input_fn, eval_hooks=[logging_hook])#, train_steps_per_iteration=10)
+experiment.continuous_train_and_eval()
+#experiment.train_and_evaluate()
 """
 class ConditionalModel(object):
 

@@ -81,8 +81,8 @@ def convert_to(csv_file, record_file):
 def main(argv):
     csv_train = os.path.join(FLAGS.data_path, 'traindata.csv')
     csv_test = os.path.join(FLAGS.data_path, 'testdata.csv')
-    convert_to(csv_train, 'train')
-    #convert_to(csv_test, 'test')
+    #convert_to(csv_train, 'train')
+    convert_to(csv_test, 'test')
 
 if __name__ == "__main__":
     tf.app.run(main=main)
