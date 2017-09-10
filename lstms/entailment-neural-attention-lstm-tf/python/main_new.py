@@ -37,6 +37,11 @@ if __name__ == "__main__":
     parser.add_argument("--embedding_dim", type=int, default=300, help="Word2Vec dimension")
     parser.add_argument("--sequence_length", type=int, default=20, help="final length of each sequence (premise and hypothesis), padded with null-words if needed")
     parser.add_argument("--num_units", type=int, default=100, help="LSTM output dimension (k in the original paper)")
+
+    parser.add_argument("--restore_path", type=str, default="", help="restore session checkpoint")
+    parser.add_argument("--entailment_samples", type=str, default="positive", help="entailment samples directories, separated by ','")
+    parser.add_argument("--neutral_samples", type=str, default="mix_unrelated", help="neutral samples directories, separated by ','")
+    parser.add_argument("--contradiction_samples", type=str, default="", help="contradiction samples directories, separated by ','")
     args = parser.parse_args()
 
     # PARAMETERS
@@ -52,13 +57,21 @@ if __name__ == "__main__":
                     "batch_size": {"train": args.batch_size_train, "dev": args.batch_size_dev, "test": args.batch_size_test},
                     "sequence_length": args.sequence_length,
                     "weight_decay": args.weight_decay,
+
+                    "restore_path": args.restore_path
                 }
 
     for key, parameter in parameters.items(): #parameters.iteritems():
         print ("{}: {}".format(key, parameter))
 
     # MAIN
-    word2vec, dataset = load_data(data_dir=args.data_dir, word2vec_path=args.word2vec_path)
+    data_parameters={
+        "entailment_samples": list(filter(None, args.entailment_samples.split(","))),
+        "neutral_samples": list(filter(None, args.neutral_samples.split(","))),
+        "contradiction_samples": list(filter(None, args.contradiction_samples.split(",")))
+    }
+    word2vec, dataset = load_data(data_dir=args.data_dir, word2vec_path=args.word2vec_path, parameters=data_parameters)
 
-    if args.train:
-        train(word2vec=word2vec, dataset=dataset, parameters=parameters)
+    #if args.train:
+        #train(word2vec=word2vec, dataset=dataset, parameters=parameters)
+    train(word2vec=word2vec, dataset=dataset, parameters=parameters, is_train=args.train)

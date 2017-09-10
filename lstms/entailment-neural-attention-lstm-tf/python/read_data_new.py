@@ -1,17 +1,17 @@
 import os
 import pandas as pd
 
-def load_dataset(dataset_path, type_set):
+def load_dataset(dataset_path, type_set, parameters):
     if "snli" in dataset_path:
         df = pd.read_csv(os.path.join(dataset_path, "snli_1.0_{}.txt".format(type_set)), delimiter="\t")
         return {"premises": [val[0] for val in df[["sentence1"]].values],
                 "hypothesis": [val[0] for val in df[["sentence2"]].values],
                 "targets": [val[0] for val in df[["gold_label"]].values]}
 
-    if(type_set not in ["train", "test"]):
-        type_set="test"
+    #if(type_set not in ["train", "test"]):
+    #    type_set="test"
 
-    label_to_directory={"entailment":["positive"], "neutral":["mix_within", "mix_unrelated"], "contradiction":[]}
+    label_to_directory={"entailment":parameters["entailment_samples"], "neutral":parameters["neutral_samples"], "contradiction":parameters["contradiction_samples"]}
 
     premises=[]
     hypothesis=[]

@@ -27,7 +27,7 @@ def clean_sequence_to_words(sequence):
             sequence.pop(i)
     return sequence
 
-def load_data(data_dir="../../_Resources/snli_1.0/snli_1.0", word2vec_path="../../_Resources/GoogleNews-vectors-negative300.bin"):
+def load_data(data_dir="../../_Resources/snli_1.0/snli_1.0", word2vec_path="../../_Resources/GoogleNews-vectors-negative300.bin", parameters=None):
 
     print ("\nLoading word2vec:")
     word2vec = {}
@@ -41,11 +41,13 @@ def load_data(data_dir="../../_Resources/snli_1.0/snli_1.0", word2vec_path="../.
     for type_set in ["train", "dev", "test"]: 
         #df = pd.read_csv(os.path.join(data_dir, "snli_1.0_{}.txt".format(type_set)), delimiter="\t")
         #dataset[type_set] = {"premises": df[["sentence1"]].values, "hypothesis": df[["sentence2"]].values, "targets": df[["gold_label"]].values}
-        dataset[type_set]=load_dataset(data_dir, type_set)
+        dataset[type_set]=load_dataset(data_dir, type_set, parameters)
 
     tokenized_dataset = simple_preprocess(dataset=dataset)
     print ("dataset: done\n")
     return word2vec, tokenized_dataset
+
+labels2stance = {0: "neutral", 1: "entailment", 2: "contradiction"}
 
 def simple_preprocess(dataset):
     tokenized_dataset = dict((type_set, {"premises": [], "hypothesis": [], "targets": []}) for type_set in dataset)
@@ -82,9 +84,9 @@ def simple_preprocess(dataset):
 #from network import RNN, LSTMCell, AttentionLSTMCell
 from network_new import RNN, LSTMCell, AttentionLSTMCell
 from batcher import Batcher
+import datetime
 
-
-def train(word2vec, dataset, parameters):
+def train(word2vec, dataset, parameters, is_train=True):
     modeldir = os.path.join(parameters["runs_dir"], parameters["model_name"])
     if not os.path.exists(modeldir):
         os.mkdir(modeldir)
@@ -145,10 +147,42 @@ def train(word2vec, dataset, parameters):
 
         optimizer = tf.train.AdamOptimizer(learning_rate=parameters["learning_rate"], name="ADAM", beta1=0.9, beta2=0.999)
         train_op = optimizer.minimize(global_loss)
-
-        sess.run(tf.global_variables_initializer())
+        if len(parameters["restore_path"]) > 0:
+            saver.restore(sess, parameters["restore_path"])
+        else:
+            sess.run(tf.global_variables_initializer())
         
         batcher = Batcher(word2vec=word2vec)
+
+        if(not is_train): #test only
+            print("\nTesting ...")
+            test_batches = batcher.batch_generator(dataset=dataset["test"], num_epochs=1,
+                                                   batch_size=parameters["batch_size"]["test"],
+                                                   sequence_length=parameters["sequence_length"], is_random=False)
+            for test_step, (test_batch, _) in enumerate(test_batches):
+                feed_dict = {
+                    premises_ph: np.transpose(test_batch["premises"], (1, 0, 2)),
+                    hypothesis_ph: np.transpose(test_batch["hypothesis"], (1, 0, 2)),
+                    targets_ph: test_batch["targets"],
+                    keep_prob_ph: 1.,
+                }
+
+                summary_str, test_loss, test_accuracy, test_predictions = sess.run(
+                    [test_summary_op, loss, accuracy, hypothesis.predictions], feed_dict=feed_dict)
+                file_name=os.path.join(logdir,"testing - "+ datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+                write2csv(file_name=file_name,
+                          columns={
+                              #"premises" : test_batch["premises"],
+                              #  "hypothesis" : test_batch["hypothesis"],
+                             "targets" : [labels2stance[x] for x in test_batch["targets"]],
+                             "predictions" : predictions2labels(test_predictions)
+                          })
+
+                print("\nTEST | loss={0:.2f}, accuracy={1:.2f}%   ".format(test_loss, 100. * test_accuracy))
+                print("\npredictions on: "+file_name)
+            return
+
+        print("\nTraining ...")
         train_batches = batcher.batch_generator(dataset=dataset["train"], num_epochs=parameters["num_epochs"], batch_size=parameters["batch_size"]["train"], sequence_length=parameters["sequence_length"])
         num_step_by_epoch = int(math.ceil(len(dataset["train"]["targets"]) / parameters["batch_size"]["train"]))
         last_epoch=-1
@@ -165,8 +199,8 @@ def train(word2vec, dataset, parameters):
             if train_step % 100 == 0 or epoch != last_epoch:
                 sys.stdout.write("\rTRAIN | epoch={0}/{1}, step={2}/{3} | loss={4:.2f}, accuracy={5:.2f}%   ".format(epoch + 1, parameters["num_epochs"], train_step % num_step_by_epoch, num_step_by_epoch, train_loss, 100. * train_accuracy))
                 sys.stdout.flush()
-            if (train_step % 5000 == 0) or (train_step==len(dataset["train"]["targets"])) or epoch != last_epoch:
-                test_batches = batcher.batch_generator(dataset=dataset["test"], num_epochs=1, batch_size=parameters["batch_size"]["test"], sequence_length=parameters["sequence_length"])
+            if (train_step % 5000 == 0) or (train_step==len(dataset["train"]["targets"])-1) or epoch != last_epoch:
+                test_batches = batcher.batch_generator(dataset=dataset["test"], num_epochs=1, batch_size=parameters["batch_size"]["test"], sequence_length=parameters["sequence_length"], is_random=False)
                 for test_step, (test_batch, _) in enumerate(test_batches):
                     feed_dict = {
                                     premises_ph: np.transpose(test_batch["premises"], (1, 0, 2)),
@@ -175,7 +209,7 @@ def train(word2vec, dataset, parameters):
                                     keep_prob_ph: 1.,
                                 }
 
-                    summary_str, test_loss, test_accuracy = sess.run([test_summary_op, loss, accuracy], feed_dict=feed_dict)
+                    summary_str, test_loss, test_accuracy, test_predictions = sess.run([test_summary_op, loss, accuracy, hypothesis.predictions], feed_dict=feed_dict)
                     print ("\nTEST | loss={0:.2f}, accuracy={1:.2f}%   ".format(test_loss, 100. * test_accuracy))
                     print ("")
                     test_summary_writer.add_summary(summary_str, train_step)
@@ -185,4 +219,19 @@ def train(word2vec, dataset, parameters):
 
             last_epoch=epoch
         print ("")
+        saver.save(sess, save_path=savepath, global_step=train_step)
 
+
+import csv
+def write2csv(file_name, columns):
+    rows = [dict(zip(columns,t)) for t in zip(*columns.values())]
+    with open(file_name+'.csv', 'w') as csvfile:
+        spamwriter = csv.DictWriter(csvfile,  fieldnames=columns.keys())
+        spamwriter.writeheader()
+        for r in rows:
+            spamwriter.writerow(r)
+
+def predictions2labels(predictions):
+    predicted_labels_idx = np.argmax(predictions, axis=1).tolist()
+    predicted_labels=[labels2stance[x] for x in predicted_labels_idx]
+    return predicted_labels

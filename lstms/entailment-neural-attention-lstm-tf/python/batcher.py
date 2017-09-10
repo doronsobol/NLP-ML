@@ -11,10 +11,10 @@ class Batcher(object):
         self._out_of_voc_embedding = (2 * np.random.rand(self._embedding_dim) - 1) / 20
         self._delimiter = self._word2vec["_"]
 
-    def batch_generator(self, dataset, num_epochs, batch_size, sequence_length):
+    def batch_generator(self, dataset, num_epochs, batch_size, sequence_length, is_random=True):
         ids = range(len(dataset["targets"]))
         for epoch in range(num_epochs):
-            permutation = np.random.permutation(ids)
+            permutation = np.random.permutation(ids) if is_random else ids
             for i, idx in enumerate(permutation):
                 self._premises.append(self.preprocess(sequence=dataset["premises"][idx], sequence_length=sequence_length))
                 self._hypothesis.append(self.preprocess(sequence=dataset["hypothesis"][idx], sequence_length=sequence_length, is_delimiter=True))
